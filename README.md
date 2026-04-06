@@ -1,3 +1,5 @@
+![Application CI](https://github.com/himanshunc/fastapi-ecs-app/actions/workflows/ci.yml/badge.svg)
+
 # fastapi-ecs-app
 
 Production-style FastAPI application deployed to AWS ECS Fargate using Docker, Terraform, and GitHub Actions.
