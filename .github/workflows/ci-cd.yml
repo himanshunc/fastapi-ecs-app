@@ -1,0 +1,84 @@
+name: Application CI-CD
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+  push:
+    branches:
+      - develop
+      - main
+
+jobs:
+  test-build-push-deploy:
+    name: Test, Build, Push, Deploy
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      PYTHONPATH: .
+      AWS_REGION: ap-south-1
+      ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
+      ECS_CLUSTER_NAME: fastapi-ecs-cluster
+      ECS_SERVICE_NAME: fastapi-ecs-service
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest -v
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REPOSITORY_URI
+
+      - name: Build Docker image
+        run: |
+          docker build -t fastapi-ecs-app:${GITHUB_SHA::7} .
+          docker tag fastapi-ecs-app:${GITHUB_SHA::7} $ECR_REPOSITORY_URI:${GITHUB_SHA::7}
+          docker tag fastapi-ecs-app:${GITHUB_SHA::7} $ECR_REPOSITORY_URI:latest
+
+      - name: Push Docker image to ECR
+        run: |
+          docker push $ECR_REPOSITORY_URI:${GITHUB_SHA::7}
+          docker push $ECR_REPOSITORY_URI:latest
+
+      - name: Force ECS deployment
+        run: |
+          aws ecs update-service \
+            --cluster $ECS_CLUSTER_NAME \
+            --service $ECS_SERVICE_NAME \
+            --force-new-deployment \
+            --region $AWS_REGION
+
+      - name: Wait for ECS service stability
+        run: |
+          aws ecs wait services-stable \
+            --cluster $ECS_CLUSTER_NAME \
+            --services $ECS_SERVICE_NAME \
+            --region $AWS_REGION
